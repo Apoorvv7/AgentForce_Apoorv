@@ -1,0 +1,22 @@
+{
+    "Machine Learning": [
+        "Handwritten Digit Recognition using CNN",
+        "House Price Prediction using Linear Regression"
+    ],
+    "Computer Vision": [
+        "Face Detection App using OpenCV",
+        "Object Detection using YOLO"
+    ],
+    "Natural Language Processing": [
+        "Sentiment Analysis of Movie Reviews",
+        "Chatbot using NLTK and Transformers"
+    ],
+    "Web Development": [
+        "Personal Portfolio Website",
+        "E-commerce Website with Django"
+    ],
+    "Cybersecurity": [
+        "Password Strength Analyzer",
+        "Phishing Website Detection Tool"
+    ]
+}

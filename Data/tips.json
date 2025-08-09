@@ -1,0 +1,22 @@
+{
+    "AI Researcher": [
+        "Follow free courses on fast.ai",
+        "Read 1 research paper per week",
+        "Join AI-related university clubs"
+    ],
+    "Web Developer": [
+        "Learn HTML, CSS, JavaScript from freeCodeCamp",
+        "Contribute to open source projects",
+        "Build and deploy small apps regularly"
+    ],
+    "Cybersecurity Engineer": [
+        "Practice on HackTheBox (free tier)",
+        "Learn networking basics",
+        "Participate in Capture The Flag (CTF) events"
+    ],
+    "Data Scientist": [
+        "Complete Kaggle competitions",
+        "Master Pandas, NumPy, and Matplotlib",
+        "Learn data cleaning and preprocessing"
+    ]
+}
