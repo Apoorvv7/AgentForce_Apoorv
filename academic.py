@@ -1,204 +1,286 @@
+# app.py - ScholarAI: The AI Career Co-Pilot (Final Version)
 import streamlit as st
-import pandas as pd
+import requests
 import json
-import plotly.figure_factory as ff
-import datetime
-import random
+import os
 from io import BytesIO
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
+from zipfile import ZipFile
 
-# --- Load Data ---
-courses_df = pd.read_csv("data/courses.csv")
-projects_data = json.load(open("data/projects.json", "r", encoding="utf-8"))
-research_df = pd.read_csv("data/research.csv")
-tips_data = json.load(open("data/tips.json", "r", encoding="utf-8"))
+# -------------------------
+# Config
+# -------------------------
+LLAMA_URL = "http://localhost:11434/api/generate"
+LLAMA_TIMEOUT = 300
+USER_DATA_FILE = "user_data.json"
+st.set_page_config(page_title="ScholarAI Co-Pilot", layout="wide")
 
-# --- Streamlit Setup ---
-st.set_page_config(page_title="Academic Planner AI", layout="wide")
-st.title("🎓 Academic Planner AI ")
 
-# --- Helper Functions ---
-def get_user_name():
-    if "name" not in st.session_state:
-        st.session_state.name = ""
-    st.session_state.name = st.text_input("Your Name", value=st.session_state.name)
-    return st.session_state.name
+# -------------------------
+# Helper: Call local LLaMA (Ollama)
+# -------------------------
+def call_llama(prompt, max_tokens=2048, timeout=LLAMA_TIMEOUT, model="llama3"):
+    payload = {"model": model, "prompt": prompt, "stream": False, "max_tokens": max_tokens}
+    try:
+        resp = requests.post(LLAMA_URL, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json().get("response", "")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error contacting LLaMA: {e}. Is 'ollama serve' running?")
+        return None
+    except json.JSONDecodeError:
+        st.error(f"Failed to decode LLaMA's response. Raw response: {resp.text}")
+        return None
 
-def get_current_courses():
-    if "courses_taken" not in st.session_state:
-        st.session_state.courses_taken = []
-    courses_str = st.text_area(
-        "Courses Already Taken (comma separated)",
-        value=", ".join(st.session_state.courses_taken)
-    )
-    st.session_state.courses_taken = [c.strip() for c in courses_str.split(",") if c.strip()]
-    return st.session_state.courses_taken
 
-def get_career_goal():
-    if "career_goal" not in st.session_state:
-        st.session_state.career_goal = "AI Researcher"
-    st.session_state.career_goal = st.selectbox(
-        "Career Goal",
-        ["AI Researcher", "Web Developer", "Cybersecurity Engineer", "Data Scientist"],
-        index=["AI Researcher", "Web Developer", "Cybersecurity Engineer", "Data Scientist"].index(st.session_state.career_goal)
-    )
-    return st.session_state.career_goal
+# -------------------------
+# Data Persistence
+# -------------------------
+def load_user_data():
+    if os.path.exists(USER_DATA_FILE):
+        with open(USER_DATA_FILE, 'r') as f:
+            return json.load(f)
+    return None
 
-def get_academic_interests():
-    if "interests" not in st.session_state:
-        st.session_state.interests = []
-    st.session_state.interests = st.multiselect(
-        "Academic Interests",
-        ["Machine Learning", "Computer Vision", "Natural Language Processing", "Web Development", "Cybersecurity"],
-        default=st.session_state.interests
-    )
-    return st.session_state.interests
 
-# --- Inputs ---
-name = get_user_name()
-degree = st.selectbox("Degree Program", ["B.Tech CSE", "B.Sc Physics", "M.Sc Mathematics", "Other"])
-year = st.selectbox("Current Year", ["1st Year", "2nd Year", "3rd Year", "4th Year"])
-courses_taken = get_current_courses()
-career_goal = get_career_goal()
-interests = get_academic_interests()
-time_available = st.slider("Weekly Time Available (in hours)", 5, 40, 15)
+def save_user_data(data):
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+    st.toast("Progress saved!", icon="✅")
 
-# --- Recommended Courses ---
-if st.button("Generate Plan"):
-    recommended_courses = courses_df[
-        (courses_df['year'] == int(year[0])) & (courses_df['career_goal'] == career_goal)
-    ]['course_name'].tolist()
-    recommended_courses = [c for c in recommended_courses if c.strip() not in courses_taken]
 
-    st.subheader("📚 Recommended Courses")
-    if recommended_courses:
-        for course in recommended_courses:
-            st.write(f"- {course}")
-    else:
-        st.write("No new courses found for your selection.")
+# -------------------------
+# AI Generation Functions
+# -------------------------
+def generate_roadmap(major, goal, start_semester):
+    # FIX APPLIED: Prompt is now highly specific for all list items to ensure correct data structures.
+    prompt = f"""
+    Act as an expert academic and career advisor for a university student.
+    - Major: {major}
+    - Career Goal: {goal}
+    - Starting Semester: {start_semester}
 
-    # --- Project Ideas ---
-    st.subheader("🧪 Project Ideas")
-    project_list = []
-    for interest in interests:
-        if interest in projects_data:
-            project_list.extend(projects_data[interest])
-    if project_list:
-        st.write(f"- {random.choice(project_list)}")
-    else:
-        st.write("No project ideas found for your interests.")
+    Generate a detailed, semester-by-semester roadmap for 4 semesters. For EACH semester, provide:
+    1.  courses: A list of objects, where each object has a 'name' key (e.g., [{{"name": "Intro to AI"}}]).
+    2.  certifications: A list of 1-2 relevant online certifications, each with a 'name' and 'url'.
+    3.  project: A dictionary with a 'title' and a 'description' for a practical project.
+    4.  papers: A list of 2 relevant academic papers, each with a 'title' and a 'url' (e.g., to arXiv or ACM).
+    5.  research_skill: A string describing a specific research skill to develop.
 
-    # --- Research Guidance ---
-    st.subheader("🔬 Research Guidance")
-    research_list = research_df[research_df['topic'].isin(interests)]
-    if not research_list.empty:
-        for _, row in research_list.iterrows():
-            st.write(f"- [{row['title']}]({row['link']})")
-    else:
-        st.write("No research papers found for your interests.")
+    Return the response ONLY as a single, minified, valid JSON object with a root key "roadmap" which is a list of semester objects.
+    """
+    response_text = call_llama(prompt, model="llama3:8b-instruct-q8_0")
+    if not response_text: return None
+    try:
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        if json_start == -1 or json_end == 0: raise ValueError("No JSON object found")
+        return json.loads(response_text[json_start:json_end])
+    except (json.JSONDecodeError, ValueError) as e:
+        st.error(f"AI failed to generate a valid plan. Please try again. Error: {e}")
+        st.text_area("LLM Raw Output:", response_text, height=200)
+        return None
 
-# --- Smart Weekly Schedule ---
-st.subheader("🗓 Smart Weekly Schedule (AI-Like)")
 
-if "task_data" not in st.session_state:
-    st.session_state.task_data = []
+def generate_project_plan(project_title):
+    # FIX APPLIED: Prompt now asks for simple strings in lists to avoid TypeErrors.
+    prompt = f"""
+    Based on the project idea: '{project_title}', create a detailed project plan for a student. Include:
+    1.  key_features: A list of 3-5 simple strings for the core MVP features.
+    2.  tech_stack: A list of simple strings for recommended technologies.
+    3.  milestones: A list of simple strings for the step-by-step milestones.
+    4.  repo_structure: A dictionary representing the file/folder structure (e.g., {{"app.py": "", "templates/": {{"index.html": ""}}}}).
 
-num_tasks = st.number_input("Number of tasks/projects to plan", min_value=1, max_value=10, value=len(st.session_state.task_data) or 3, step=1)
+    Return the response ONLY as a single, minified, valid JSON object.
+    """
+    response_text = call_llama(prompt)
+    if not response_text: return None
+    try:
+        # FIX APPLIED: Robust JSON extraction to handle conversational text from the LLM.
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        if json_start == -1 or json_end == 0:
+            raise ValueError("No JSON object found in the response")
 
-while len(st.session_state.task_data) < num_tasks:
-    st.session_state.task_data.append({"name": "", "priority": "Medium", "deadline": datetime.date.today() + datetime.timedelta(days=7)})
+        json_str = response_text[json_start:json_end]
+        return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError) as e:
+        st.error(f"Failed to generate project plan. Error: {e}")
+        st.text_area("LLM Raw Output:", response_text, height=150)
+        return None
 
-st.session_state.task_data = st.session_state.task_data[:num_tasks]
 
-for i in range(num_tasks):
-    col1, col2, col3 = st.columns([3, 2, 2])
-    with col1:
-        st.session_state.task_data[i]["name"] = st.text_input(f"Task {i + 1} Name", value=st.session_state.task_data[i]["name"], key=f"task_{i}_name")
-    with col2:
-        st.session_state.task_data[i]["priority"] = st.selectbox(f"Priority {i + 1}", ["Low", "Medium", "High"], index=["Low", "Medium", "High"].index(st.session_state.task_data[i]["priority"]), key=f"task_{i}_priority")
-    with col3:
-        st.session_state.task_data[i]["deadline"] = st.date_input(f"Deadline {i + 1}", value=st.session_state.task_data[i]["deadline"], key=f"task_{i}_deadline")
+def generate_weekly_nudge(user_data):
+    prompt = f"""
+    Here is a student's progress on their roadmap: {json.dumps(user_data)}.
 
-if st.button("Generate Smart Plan"):
-    task_data = st.session_state.task_data
-    total_hours = time_available
-    schedule_data = []
-    priority_weights = {"Low": 1, "Medium": 2, "High": 3}
+    Generate a concise, encouraging weekly 'nudge' message in markdown. The message should:
+    1.  Briefly celebrate a recently completed item if any.
+    2.  Suggest 1-2 concrete, achievable goals for this week from their 'Not Started' items.
+    3.  Offer a motivational tip related to their main career goal: {user_data['profile']['goal']}.
+    """
+    return call_llama(prompt, max_tokens=500)
 
-    today = datetime.date.today()
-    for task in task_data:
-        days_left = max((task["deadline"] - today).days, 1)
-        urgency_factor = max(1, (14 - days_left) / 14)
-        task["weight"] = priority_weights[task["priority"]] * urgency_factor
 
-    total_weight = sum(t["weight"] for t in task_data)
+def generate_structured_notes(raw_notes):
+    prompt = f"""
+    You are an expert study assistant. Reorganize and enhance the following raw notes into structured markdown.
+    - Create a clear structure with headings and subheadings.
+    - Bold all key terms.
+    - At the end, add a "Key Takeaways" section with a bulleted list.
+    Raw Notes: --- {raw_notes} ---
+    """
+    return call_llama(prompt, max_tokens=1000)
 
-    for task in task_data:
-        allocated_hours = round((task["weight"] / total_weight) * total_hours, 1)
-        daily_hours = round(allocated_hours / 7, 2)
-        task["allocated_hours"] = allocated_hours
-        task["daily_hours"] = daily_hours
 
-    start_hour = 8
-    for day_index, day in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
-        date = today + datetime.timedelta(days=day_index)
-        current_time = start_hour
-        for task in task_data:
-            if task["daily_hours"] > 0:
-                start_dt = datetime.datetime.combine(date, datetime.time(int(current_time), int((current_time % 1) * 60)))
-                end_dt = start_dt + datetime.timedelta(hours=task["daily_hours"])
-                schedule_data.append(dict(Task=task["name"], Start=start_dt, Finish=end_dt, Resource=task["priority"]))
-                current_time += task["daily_hours"] + 0.5
+# -------------------------
+# UI Rendering Functions
+# -------------------------
+def render_setup_page():
+    st.header("Welcome to your AI Career Co-Pilot 🚀")
+    st.markdown(
+        "Let's set up your personalized roadmap to success. This will generate a multi-semester plan tailored to your goals.")
+    with st.form("setup_form"):
+        name = st.text_input("Your Name")
+        major = st.text_input("Your Major (e.g., Computer Science)")
+        goal = st.text_input("Your Career Goal (e.g., Machine Learning Engineer)")
+        start_semester = st.text_input("Your Current or Starting Semester (e.g., Fall 2025)")
+        submitted = st.form_submit_button("Generate My Roadmap")
 
-    fig = ff.create_gantt(schedule_data, index_col='Resource', show_colorbar=False, group_tasks=True, showgrid_x=True, showgrid_y=True, height=600)
-    st.plotly_chart(fig, use_container_width=True)
+        if submitted and all([name, major, goal, start_semester]):
+            with st.spinner("Your AI Co-Pilot is building your multi-year strategy... This may take a moment."):
+                roadmap_data = generate_roadmap(major, goal, start_semester)
+            if roadmap_data:
+                full_data = {
+                    "profile": {"name": name, "major": major, "goal": goal},
+                    "roadmap": roadmap_data.get("roadmap", [])
+                }
+                for semester in full_data["roadmap"]:
+                    for key, val in semester.items():
+                        if isinstance(val, list) and val and isinstance(val[0], dict):
+                            for item in val: item['completed'] = False
+                        elif isinstance(val, dict):
+                            val['completed'] = False
+                save_user_data(full_data)
+                st.session_state.user_data = full_data
+                st.success("Your roadmap is ready!")
+                st.rerun()
 
-    st.markdown("### 🤖 AI Reasoning Behind This Plan")
-    reasoning = "\n".join([f"- **{t['name']}**: {t['allocated_hours']} hrs/week (Priority: {t['priority']}, Deadline: {t['deadline']}, Daily: {t['daily_hours']} hrs)" for t in task_data])
-    st.write(reasoning)
 
-    # --- PDF Export ---
-    def export_schedule_to_pdf(schedule_data, reasoning, filename="schedule.pdf"):
-        doc = SimpleDocTemplate(filename, pagesize=letter)
-        styles = getSampleStyleSheet()
-        elements = []
-        elements.append(Paragraph("Academic Schedule", styles["Title"]))
-        elements.append(Spacer(1, 12))
-        elements.append(Paragraph("Reasoning:", styles["Heading2"]))
-        elements.append(Paragraph(reasoning, styles["Normal"]))
-        elements.append(Spacer(1, 12))
+def render_dashboard():
+    data = st.session_state.user_data
+    profile = data.get("profile", {})
+    st.title(f"👋 Welcome back, {profile.get('name', 'Student')}!")
+    st.subheader(f"Your Goal: {profile.get('goal', 'N/A')}")
+    st.markdown("---")
 
-        table_data = [["Task", "Start", "Finish", "Resource"]]
-        for row in schedule_data:
-            table_data.append([row.get("Task", ""), str(row.get("Start", "")), str(row.get("Finish", "")), row.get("Resource", "")])
+    tab1, tab2, tab3 = st.tabs(["🗺️ My Roadmap", "📝 Notes Assistant", "⚙️ Settings"])
 
-        table = Table(table_data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-        ]))
-        elements.append(table)
-        doc.build(elements)
-        return filename
+    with tab1:
+        if st.button("✨ Get My Weekly Nudge"):
+            with st.spinner("Generating your focus for the week..."):
+                nudge = generate_weekly_nudge(data)
+                st.info(nudge)
 
-    pdf_path = export_schedule_to_pdf(schedule_data, reasoning)
-    with open(pdf_path, "rb") as f:
-        st.download_button(label="📄 Download Smart Schedule PDF", data=f, file_name="smart_schedule.pdf", mime="application/pdf")
+        for i, semester in enumerate(data.get("roadmap", [])):
+            with st.expander(f"### {semester.get('semester', 'Unnamed Semester')}", expanded=(i == 0)):
+                cols = st.columns(2)
+                with cols[0]:
+                    st.markdown("#### 🎓 Courses")
+                    for j, course in enumerate(semester.get('courses', [])):
+                        is_done = st.checkbox(
+                            course['name'], value=course.get('completed', False), key=f"sem{i}_course{j}"
+                        )
+                        if is_done != course.get('completed', False):
+                            st.session_state.user_data['roadmap'][i]['courses'][j]['completed'] = is_done
+                            save_user_data(st.session_state.user_data)
+                with cols[1]:
+                    st.markdown("#### 📜 Certifications")
+                    for j, cert in enumerate(semester.get('certifications', [])):
+                        is_done = st.checkbox(
+                            f"[{cert['name']}]({cert['url']})", value=cert.get('completed', False),
+                            key=f"sem{i}_cert{j}"
+                        )
+                        if is_done != cert.get('completed', False):
+                            st.session_state.user_data['roadmap'][i]['certifications'][j]['completed'] = is_done
+                            save_user_data(st.session_state.user_data)
 
-# --- Tips ---
-st.subheader("💡 Tips & Resources")
-if career_goal in tips_data:
-    for tip in tips_data[career_goal]:
-        st.write(f"- {tip}")
+                st.markdown("#### 🛠️ Project")
+                project = semester.get('project', {})
+                proj_cols = st.columns([0.8, 0.2])
+                with proj_cols[0]:
+                    is_done = st.checkbox(
+                        f"**{project.get('title', '')}**: {project.get('description', '')}",
+                        value=project.get('completed', False), key=f"sem{i}_project"
+                    )
+                    if is_done != project.get('completed', False):
+                        st.session_state.user_data['roadmap'][i]['project']['completed'] = is_done
+                        save_user_data(st.session_state.user_data)
+                with proj_cols[1]:
+                    if st.button("Plan Project", key=f"plan_proj_{i}"):
+                        st.session_state.selected_project = project.get('title')
+
+                if st.session_state.get('selected_project') == project.get('title'):
+                    with st.container(border=True):
+                        st.markdown(f"#### Planning: {project.get('title')}")
+                        plan = generate_project_plan(project.get('title'))
+                        if plan:
+                            st.write("**Key Features:**", ", ".join(plan.get('key_features', [])))
+                            st.write("**Tech Stack:**", ", ".join(plan.get('tech_stack', [])))
+                            st.write("**Milestones:**")
+                            for m in plan.get('milestones', []): st.markdown(f"- {m}")
+
+                            if st.button("Download Repo Structure", key=f"dl_repo_{i}"):
+                                in_memory_zip = BytesIO()
+                                with ZipFile(in_memory_zip, 'w') as zf:
+                                    def add_to_zip(structure, path=""):
+                                        for name, content in structure.items():
+                                            current_path = os.path.join(path, name)
+                                            if isinstance(content, dict):
+                                                add_to_zip(content, current_path)
+                                            else:
+                                                zf.writestr(current_path, str(content))
+
+                                    add_to_zip(plan.get('repo_structure', {}))
+                                st.download_button(
+                                    "Download .zip", data=in_memory_zip.getvalue(),
+                                    file_name=f"{project.get('title').replace(' ', '_')}_scaffold.zip",
+                                    mime="application/zip"
+                                )
+                        if st.button("Close Planner", key=f"close_planner_{i}"):
+                            st.session_state.selected_project = None
+                            st.rerun()
+
+    with tab2:
+        st.header("✍️ Notes Assistant")
+        st.markdown(
+            "Paste your raw notes from a lecture or paper, and the AI will structure and summarize them for you.")
+        raw_notes = st.text_area("Paste Raw Notes Here:", height=250)
+        if st.button("Structure My Notes"):
+            if raw_notes:
+                with st.spinner("AI is organizing your thoughts..."):
+                    structured_notes = generate_structured_notes(raw_notes)
+                    st.markdown("### Your Structured Notes")
+                    st.markdown(structured_notes)
+            else:
+                st.warning("Please paste some notes first.")
+
+    with tab3:
+        st.header("⚙️ Settings")
+        st.warning("This will delete your current roadmap and all progress!")
+        if st.button("Reset and Start Over"):
+            if os.path.exists(USER_DATA_FILE):
+                os.remove(USER_DATA_FILE)
+            st.session_state.clear()
+            st.rerun()
+
+
+# -------------------------
+# Main App Logic
+# -------------------------
+if "user_data" not in st.session_state:
+    st.session_state.user_data = load_user_data()
+
+if st.session_state.user_data:
+    render_dashboard()
 else:
-    st.write("No tips available for this career goal.")
-
-
-
-
-
+    render_setup_page()
