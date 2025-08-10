@@ -12,7 +12,7 @@ from zipfile import ZipFile
 LLAMA_URL = "http://localhost:11434/api/generate"
 LLAMA_TIMEOUT = 300
 USER_DATA_FILE = "user_data.json"
-st.set_page_config(page_title="ScholarAI Co-Pilot", layout="wide")
+st.set_page_config(page_title="Welcome to ScholarAI", layout="wide")
 
 
 # -------------------------
